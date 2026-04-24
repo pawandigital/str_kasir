@@ -111,6 +111,35 @@ def page_auth():
     st.markdown("<p style='text-align: center;'>Solusi Kasir & Manajemen Toko Berbasis Data</p>", unsafe_allow_html=True)
     st.write("---")
 
+    # --- FITUR DOWNLOAD PANDUAN (SEBELUM LOGIN) ---
+    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+    with col_dl2:
+        st.info("📚 Baru pertama kali? Unduh panduan penggunaan sebelum memulai.")
+        try:
+            # Pastikan file Panduan_POS_SaaS.pdf ada di folder yang sama dengan app.py
+            with open("Panduan_POS_SaaS.pdf", "rb") as pdf_file:
+                PDFbyte = pdf_file.read()
+            st.download_button(
+                label="⬇️ Download Panduan Aplikasi (PDF)",
+                data=PDFbyte,
+                file_name="Panduan_POS_SaaS.pdf",
+                mime="application/octet-stream",
+                use_container_width=True
+            )
+        except FileNotFoundError:
+            st.download_button(
+                label="⬇️ Download Panduan Aplikasi (PDF)",
+                data="File panduan belum diunggah oleh admin.",
+                file_name="Panduan_Error.txt",
+                mime="text/plain",
+                use_container_width=True,
+                disabled=True
+            )
+            st.caption("*Catatan untuk Developer: Simpan file PDF dengan nama 'Panduan_POS_SaaS.pdf' di folder ini agar tombol berfungsi.*")
+    
+    st.write("---")
+
+    # --- FORM LOGIN & REGISTER ---
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         tab_login, tab_register = st.tabs(["🔑 Login", "📝 Daftar Toko Baru"])
@@ -255,14 +284,33 @@ def page_kasir():
                 st.success(f"Transaksi Berhasil Disimpan! (ID: {transaction_id[:8]})")
                 st.balloons() # Animasi balon sebagai micro-interaction yang menyenangkan
 
-# --- TAMBAHAN PHASE 3: HALAMAN INVENTORY ---
+# --- TAMBAHAN PHASE 3 & UPDATE CRUD: HALAMAN INVENTORY ---
 def page_inventory():
     st.header("📦 Manajemen Inventory")
     st.write("Kelola daftar produk dan stok toko Anda di sini.")
 
-    # Bagian 1: Form Tambah Produk Baru menggunakan st.expander agar UI tidak penuh
-    with st.expander("➕ Tambah Produk Baru", expanded=False):
-        # st.form berguna agar halaman tidak me-refresh sebelum tombol submit ditekan
+    # Ambil seluruh data produk dari database beserta ID-nya
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT product_id, name, category, price, stock FROM products WHERE user_id = ?", (st.session_state.active_user_id,))
+    products_raw = cursor.fetchall()
+    conn.close()
+
+    # Membuat 3 Tab untuk memisahkan fitur CRUD agar UI lebih bersih
+    tab_read, tab_create, tab_edit = st.tabs(["📋 Daftar Produk", "➕ Tambah Baru", "✏️ Edit / Hapus"])
+
+    # --- 1. READ (Membaca/Menampilkan Data) ---
+    with tab_read:
+        if not products_raw:
+            st.info("Belum ada produk. Silakan tambahkan produk baru di tab 'Tambah Baru'.")
+        else:
+            # Konversi ke Pandas DataFrame agar tabel cantik
+            df_products = pd.DataFrame(products_raw, columns=['ID', 'Nama Produk', 'Kategori', 'Harga (Rp)', 'Sisa Stok'])
+            # Tampilkan tabel, tapi sembunyikan kolom ID karena user tidak perlu melihat UUID
+            st.dataframe(df_products.drop(columns=['ID']), use_container_width=True, hide_index=True)
+
+    # --- 2. CREATE (Menambah Data Baru) ---
+    with tab_create:
         with st.form("form_tambah_produk", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
@@ -272,13 +320,12 @@ def page_inventory():
                 new_price = st.number_input("Harga Jual (Rp)", min_value=0, step=1000)
                 new_stock = st.number_input("Stok Awal", min_value=0, step=1)
             
-            submitted = st.form_submit_button("Simpan Produk", type="primary")
+            submitted = st.form_submit_button("💾 Simpan Produk Baru", type="primary")
             
             if submitted:
                 if not new_name.strip():
                     st.error("Gagal: Nama produk tidak boleh kosong!")
                 else:
-                    # Simpan ke Database
                     conn = sqlite3.connect(DB_NAME)
                     cursor = conn.cursor()
                     new_id = str(uuid.uuid4())
@@ -289,25 +336,71 @@ def page_inventory():
                     conn.commit()
                     conn.close()
                     st.success(f"Produk '{new_name}' berhasil ditambahkan!")
-                    st.rerun() # Refresh halaman untuk mengupdate tabel di bawahnya
+                    st.rerun()
 
-    # Bagian 2: Tabel Daftar Produk
-    st.subheader("Daftar Produk & Stok")
-    
-    conn = sqlite3.connect(DB_NAME)
-    # Menggunakan Pandas read_sql_query untuk langsung mengubah output SQL menjadi DataFrame
-    df_products = pd.read_sql_query(
-        "SELECT name AS 'Nama Produk', category AS 'Kategori', price AS 'Harga (Rp)', stock AS 'Sisa Stok' FROM products WHERE user_id = ?", 
-        conn, 
-        params=(st.session_state.active_user_id,)
-    )
-    conn.close()
+    # --- 3. UPDATE & DELETE (Mengubah & Menghapus Data) ---
+    with tab_edit:
+        if not products_raw:
+            st.warning("Data produk masih kosong, tidak ada yang bisa diubah.")
+        else:
+            # Buat dictionary untuk selectbox (ID sebagai value rahasia, Nama sebagai label yang tampil)
+            prod_dict = {p[0]: f"{p[1]} - Rp {p[3]:,.0f} (Stok: {p[4]})" for p in products_raw}
+            selected_id = st.selectbox("Pilih Produk yang ingin dikelola:", options=list(prod_dict.keys()), format_func=lambda x: prod_dict[x])
 
-    if df_products.empty:
-        st.info("Belum ada produk. Silakan tambahkan produk baru di atas.")
-    else:
-        # Menampilkan tabel interaktif yang cantik
-        st.dataframe(df_products, use_container_width=True, hide_index=True)
+            # Ambil detail produk yang sedang dipilih
+            selected_prod = next(p for p in products_raw if p[0] == selected_id)
+
+            st.write("---")
+            st.write("📝 **Ubah Data Produk**")
+            
+            # --- FORM UPDATE ---
+            with st.form("form_edit_produk"):
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    edit_name = st.text_input("Nama Produk", value=selected_prod[1]) # Isi default dengan data lama
+                    categories = ["Makanan", "Minuman", "Snack", "Lainnya"]
+                    cat_index = categories.index(selected_prod[2]) if selected_prod[2] in categories else 3
+                    edit_category = st.selectbox("Kategori", categories, index=cat_index)
+                with col_e2:
+                    edit_price = st.number_input("Harga Jual (Rp)", min_value=0, step=1000, value=int(selected_prod[3]))
+                    edit_stock = st.number_input("Sisa Stok", min_value=0, step=1, value=int(selected_prod[4]))
+
+                btn_update = st.form_submit_button("🔄 Update Produk", type="primary")
+
+                if btn_update:
+                    if not edit_name.strip():
+                        st.error("Nama produk tidak boleh kosong!")
+                    else:
+                        conn = sqlite3.connect(DB_NAME)
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE products SET name=?, category=?, price=?, stock=? WHERE product_id=? AND user_id=?",
+                            (edit_name, edit_category, edit_price, edit_stock, selected_id, st.session_state.active_user_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                        st.success("Data produk berhasil diperbarui!")
+                        st.rerun()
+
+            # --- FITUR DELETE (ZONA BAHAYA) ---
+            st.divider()
+            st.write("⚠️ **Zona Bahaya**")
+            st.info("Tindakan ini tidak dapat dibatalkan. Menghapus produk mungkin akan mempengaruhi riwayat laporan jika tidak ditangani dengan benar.")
+            
+            col_del1, col_del2 = st.columns([3, 1])
+            with col_del1:
+                # Menggunakan Checkbox sebagai pengaman agar tidak sengaja terhapus
+                confirm_delete = st.checkbox(f"Saya yakin ingin menghapus produk **{selected_prod[1]}** secara permanen.")
+            with col_del2:
+                # Tombol hapus hanya aktif jika checkbox dicentang
+                if st.button("🗑️ Hapus Produk", type="secondary", use_container_width=True, disabled=not confirm_delete):
+                    conn = sqlite3.connect(DB_NAME)
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM products WHERE product_id=? AND user_id=?", (selected_id, st.session_state.active_user_id))
+                    conn.commit()
+                    conn.close()
+                    st.error(f"Produk '{selected_prod[1]}' telah dihapus dari sistem.")
+                    st.rerun()
 
 # --- TAMBAHAN PHASE 4: HALAMAN DASHBOARD ANALYTICS ---
 def page_dashboard():
